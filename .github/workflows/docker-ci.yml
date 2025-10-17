@@ -337,7 +337,11 @@ jobs:
         id: load_env
         run: |
           if [ -f "${{ matrix.project.env_file }}" ]; then
-            echo "build_args=$(grep -v '^#' "${{ matrix.project.env_file }}" | grep -v '^$')" >> "$GITHUB_OUTPUT"
+            {
+              echo 'build_args<<EOF'
+              grep -v '^#' "${{ matrix.project.env_file }}" | grep -v '^$'
+              echo 'EOF'
+            } >> "$GITHUB_OUTPUT"
           else
             echo "build_args=" >> "$GITHUB_OUTPUT"
           fi
