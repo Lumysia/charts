@@ -14,10 +14,6 @@ on:
       project:
         description: 'Optional subdirectory to build (default: all projects)'
         required: false
-      platforms:
-        description: 'Comma-separated platforms (default: linux/amd64,linux/arm64)'
-        required: false
-        default: 'linux/amd64,linux/arm64'
   schedule:
     - cron: '0 0 1,15 * *'
 
@@ -30,8 +26,6 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       project_matrix: ${{ steps.collect.outputs.project_matrix }}
-      platform_list: ${{ steps.collect.outputs.platform_list }}
-      platform_map: ${{ steps.collect.outputs.platform_map }}
       has_projects: ${{ steps.collect.outputs.has_projects }}
     steps:
       - uses: actions/checkout@v5
@@ -40,8 +34,6 @@ jobs:
       - id: collect
         env:
           REQUESTED_PROJECT: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.project || '' }}
-          REQUESTED_PLATFORMS: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.platforms || '' }}
-          DEFAULT_PLATFORMS: linux/amd64,linux/arm64
           EVENT_NAME: ${{ github.event_name }}
           BASE_SHA: ${{ github.event.before }}
           HEAD_SHA: ${{ github.sha }}
@@ -53,16 +45,6 @@ jobs:
           }
 
           requested_project="${REQUESTED_PROJECT}"
-          platforms_input="${REQUESTED_PLATFORMS}"
-          if [ -z "$platforms_input" ]; then
-            platforms_input="$DEFAULT_PLATFORMS"
-          fi
-          platforms_input="$(echo "$platforms_input" | tr -d '[:space:]')"
-          if [ -z "$platforms_input" ]; then
-            echo "::error::No platforms specified."
-            exit 1
-          fi
-          
           projects_json='[]'
           project_count=0
           match_count=0
@@ -94,6 +76,20 @@ jobs:
               env_files_found=1
               version=$(basename "$env_file" .env)
               echo "Found env file '$env_file' for project '$name', version '$version'."
+
+              platform_file="$dir/platforms"
+              project_platforms="linux/amd64"
+              if [ -f "$platform_file" ]; then
+                platforms_from_file=$(tr -d '[:space:]' < "$platform_file")
+                if [ -n "$platforms_from_file" ]; then
+                  project_platforms="$platforms_from_file"
+                  echo "Found platforms in '$platform_file': $project_platforms"
+                else
+                  echo "::warning::Platform file '$platform_file' is empty, using default '$project_platforms'."
+                fi
+              else
+                  echo "::warning::Platform file not found at '$platform_file', using default '$project_platforms'."
+              fi
 
               dockerfile_path="$dir/Dockerfile"
               if [ -f "$dockerfile_path" ]; then
@@ -130,6 +126,7 @@ jobs:
                 --arg external "$external" \
                 --arg env_file "$env_file" \
                 --arg version "$version" \
+                --arg platforms "$project_platforms" \
                 '{
                   name:$name,
                   path:$path,
@@ -140,7 +137,8 @@ jobs:
                   token_env:(if $token_env == "" then null else $token_env end),
                   external:($external == "true"),
                   env_file:$env_file,
-                  version:$version
+                  version:$version,
+                  platforms:$platforms
                 }')
               projects_json=$(echo "$projects_json" | jq --argjson entry "$entry" '. + [$entry]')
               project_count=$((project_count + 1))
@@ -170,14 +168,9 @@ jobs:
           fi
           
           projects_json=$(echo "$projects_json" | jq -c '.')
-          platform_map=$(jq -nc --arg list "$platforms_input" '
-            [$list | split(",")[] | select(length>0) | {platform:., arch:(. | split("/") | last)}]
-          ' | jq -c '.')
           
           printf 'has_projects=%s\n' "$(if [ "$project_count" -gt 0 ]; then echo "true"; else echo "false"; fi)" >> "$GITHUB_OUTPUT"
           printf 'project_matrix=%s\n' "$projects_json" >> "$GITHUB_OUTPUT"
-          printf 'platform_list=%s\n' "$platforms_input" >> "$GITHUB_OUTPUT"
-          printf 'platform_map=%s\n' "$platform_map" >> "$GITHUB_OUTPUT"
 
   build:
     name: build (${{ matrix.project.name }}-${{ matrix.project.version }})
@@ -190,8 +183,6 @@ jobs:
         project: ${{ fromJson(needs.prepare.outputs.project_matrix) }}
     env:
       REGISTRY: ${{ vars.CONTAINER_REGISTRY != '' && vars.CONTAINER_REGISTRY || 'ghcr.io' }}
-      PLATFORM_LIST: ${{ needs.prepare.outputs.platform_list }}
-      PLATFORM_MAP: ${{ needs.prepare.outputs.platform_map }}
     steps:
       - uses: actions/checkout@v5
         with:
@@ -288,8 +279,8 @@ jobs:
             nightly_tag="${file_version}-nightly"
           fi
           
-          description="Container image for $PROJECT_NAME, version $file_version. For full details, see the documentation"
-          project_description="Container image for $PROJECT_NAME. For full details, see the documentation"
+          description="Container image for $PROJECT_NAME, version $file_version. For full details, see the documentation."
+          project_description="Container image for $PROJECT_NAME. For full details, see the documentation."
 
           repo="$GITHUB_REPOSITORY"
           default_branch="main"
@@ -328,10 +319,10 @@ jobs:
             type=raw,value=latest,enable=${{ github.ref_type == 'tag' }}
           labels: |
             org.opencontainers.image.title=${{ steps.vars.outputs.project_slug }}
-            org.opencontainers.image.description=${{ steps.vars.outputs.description }}
-            org.opencontainers.image.documentation=${{ steps.vars.outputs.documentation }}
-            org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
-            org.opencontainers.image.url=${{ steps.vars.outputs.project_url }}
+            org.opencontainers.image.description=
+            org.opencontainers.image.documentation=
+            org.opencontainers.image.source=
+            org.opencontainers.image.url=
             org.opencontainers.image.revision=${{ github.sha }}
             org.opencontainers.image.vendor=${{ steps.vars.outputs.vendor_name }}
 
@@ -355,7 +346,7 @@ jobs:
           context: ${{ matrix.project.context }}
           file: ${{ matrix.project.dockerfile }}
           push: true
-          platforms: ${{ env.PLATFORM_LIST }}
+          platforms: ${{ matrix.project.platforms }}
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
           annotations: ${{ steps.meta.outputs.annotations }}
@@ -366,20 +357,23 @@ jobs:
       #  env:
       #    IMAGE: ${{ steps.vars.outputs.image }}
       #    DIGEST: ${{ steps.build.outputs.digest }}
-      #    PLATFORM_MAP: ${{ env.PLATFORM_MAP }}
+      #    PLATFORMS: ${{ matrix.project.platforms }}
       #    NIGHTLY_TAG: ${{ steps.vars.outputs.nightly_tag }}
       #    VERSION_TAG: ${{ steps.vars.outputs.version_tag }}
       #  run: |
       #    set -euo pipefail
+      #    platform_map=$(jq -nc --arg list "$PLATFORMS" '
+      #      [$list | split(",")[] | select(length>0) | {platform:., arch:(. | split("/") | last)}]
+      #    ' | jq -c '.')
       #    ref="$IMAGE@$DIGEST"
       #    docker buildx imagetools inspect "$ref" --raw | jq -c '.manifests[]' | while read -r manifest; do
       #      platform=$(echo "$manifest" | jq -r '.platform.os + "/" + .platform.architecture')
       #      digest=$(echo "$manifest" | jq -r '.digest')
-      #      arch=$(echo "$PLATFORM_MAP" | jq -r --arg platform "$platform" '.[] | select(.platform == $platform) | .arch' | head -n 1)
+      #      arch=$(echo "$platform_map" | jq -r --arg platform "$platform" '.[] | select(.platform == $platform) | .arch' | head -n 1)
       #      if [ -z "$arch" ]; then
       #        continue
       #      fi
-
+      #
       #      if [[ "${{ github.ref_type }}" == "tag" ]]; then
       #        if [ -n "$VERSION_TAG" ]; then
       #          docker buildx imagetools create --tag "$IMAGE:${VERSION_TAG}-${arch}" "$IMAGE@$digest"
