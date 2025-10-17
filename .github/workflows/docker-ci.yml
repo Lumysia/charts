@@ -252,7 +252,7 @@ jobs:
           PROJECT_README: ${{ matrix.project.readme }}
           REGISTRY: ${{ env.REGISTRY }}
           OWNER: ${{ github.repository_owner }}
-          REGISTRY_NAMESPACE: ${{ vars.CONTAINER_NAMESPACE }}
+          REGISTRY_NAMESPACE: ${{ secrets.CONTAINER_NAMESPACE }}
           REGISTRY_USERNAME: ${{ secrets.REGISTRY_USERNAME }}
         run: |
           set -euo pipefail
