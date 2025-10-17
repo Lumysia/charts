@@ -389,6 +389,16 @@ jobs:
       #      fi
       #    done
       
+      - name: Update Docker Hub README
+        if: env.REGISTRY == 'docker.io'
+        uses: peter-evans/dockerhub-description@v4
+        with:
+          username: ${{ secrets.REGISTRY_USERNAME }}
+          password: ${{ secrets.REGISTRY_TOKEN }}
+          repository: ${{ secrets.CONTAINER_NAMESPACE }}/${{ steps.vars.outputs.project_slug }}
+          readme-filepath: ${{ matrix.project.readme }}
+          short-description: ${{ steps.vars.outputs.description }}
+
       - name: Summarize artifacts
         env:
           PROJECT_NAME: ${{ matrix.project.name }}
