@@ -319,10 +319,10 @@ jobs:
             type=raw,value=latest,enable=${{ github.ref_type == 'tag' }}
           labels: |
             org.opencontainers.image.title=${{ steps.vars.outputs.project_slug }}
-            org.opencontainers.image.description=
-            org.opencontainers.image.documentation=
-            org.opencontainers.image.source=
-            org.opencontainers.image.url=
+            org.opencontainers.image.description=${{ steps.vars.outputs.description }}
+            org.opencontainers.image.documentation=${{ steps.vars.outputs.documentation }}
+            org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
+            org.opencontainers.image.url=${{ steps.vars.outputs.project_url }}
             org.opencontainers.image.revision=${{ github.sha }}
             org.opencontainers.image.vendor=${{ steps.vars.outputs.vendor_name }}
 
