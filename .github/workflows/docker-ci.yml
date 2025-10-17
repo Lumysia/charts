@@ -289,6 +289,7 @@ jobs:
           fi
           
           description="Container image for $PROJECT_NAME, version $file_version. For full details, see the documentation link."
+          project_description="Container image for $PROJECT_NAME. For full details, see the documentation link."
 
           repo="$GITHUB_REPOSITORY"
           default_branch="main"
@@ -296,7 +297,7 @@ jobs:
           if [ -n "${PROJECT_README}" ] && [ -f "$PROJECT_README" ]; then
             documentation="https://github.com/$repo/blob/$default_branch/$PROJECT_README"
           fi
-          
+
           vendor_name=""
           if [ "$REGISTRY" = "ghcr.io" ]; then
             vendor_name="$OWNER"
@@ -311,6 +312,7 @@ jobs:
           printf 'nightly_tag=%s\n' "$nightly_tag" >> "$GITHUB_OUTPUT"
           printf 'version_tag=%s\n' "$version_tag" >> "$GITHUB_OUTPUT"
           printf 'description=%s\n' "$description" >> "$GITHUB_OUTPUT"
+          printf 'project_description=%s\n' "$project_description" >> "$GITHUB_OUTPUT"
           printf 'documentation=%s\n' "$documentation" >> "$GITHUB_OUTPUT"
           printf 'project_url=%s\n' "$project_url" >> "$GITHUB_OUTPUT"
           printf 'vendor_name=%s\n' "$vendor_name" >> "$GITHUB_OUTPUT"
@@ -397,7 +399,7 @@ jobs:
           password: ${{ secrets.REGISTRY_TOKEN }}
           repository: ${{ secrets.CONTAINER_NAMESPACE }}/${{ steps.vars.outputs.project_slug }}
           readme-filepath: ${{ matrix.project.readme }}
-          short-description: ${{ steps.vars.outputs.description }}
+          short-description: ${{ steps.vars.outputs.project_description }}
 
       - name: Summarize artifacts
         env:
