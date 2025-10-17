@@ -288,8 +288,8 @@ jobs:
             nightly_tag="${file_version}-nightly"
           fi
           
-          description="Container image for $PROJECT_NAME, version $file_version. For full details, see the documentation link."
-          project_description="Container image for $PROJECT_NAME. For full details, see the documentation link."
+          description="Container image for $PROJECT_NAME, version $file_version. For full details, see the documentation"
+          project_description="Container image for $PROJECT_NAME. For full details, see the documentation"
 
           repo="$GITHUB_REPOSITORY"
           default_branch="main"
