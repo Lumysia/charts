@@ -16,7 +16,6 @@ This image includes the following Caddy modules:
 - `github.com/caddy-dns/acmedns` - ACME DNS challenge support
 - `github.com/mholt/caddy-l4` - Layer 4 (non-HTTP) proxy capabilities
 - `github.com/caddy-dns/cloudflare` - Cloudflare DNS provider
-- `github.com/greenpau/caddy-security` - Enhanced security features
 
 ### alpine-docker tag
 
