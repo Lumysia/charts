@@ -7,7 +7,7 @@ ARG CADDY_MODULES
 
 RUN set -eux; \
     if [ -n "$CADDY_MODULES" ]; then \
-        xcaddy build $(echo "$CADDY_MODULES" | tr -d '"' | xargs -n1 echo --with | xargs); \
+        xcaddy build $(echo "$CADDY_MODULES" | xargs -n1 echo --with | xargs); \
     else \
         xcaddy build; \
     fi
