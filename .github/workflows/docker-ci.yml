@@ -38,13 +38,14 @@ jobs:
         env:
           REQUESTED_PROJECT: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.project || '' }}
           EVENT_NAME: ${{ github.event_name }}
-          BASE_SHA: ${{ github.event.before }}
-          HEAD_SHA: ${{ github.sha }}
+          BASE_SHA: ${{ (github.event_name == 'push' && github.event.before) || (github.event_name == 'pull_request' && github.event.pull_request.base.sha) || '' }}
+          HEAD_SHA: ${{ (github.event_name == 'push' && github.sha) || (github.event_name == 'pull_request' && github.event.pull_request.head.sha) || '' }}
         run: |
           set -euo pipefail
           
-          is_push_event() {
-            [ "$EVENT_NAME" = "push" ] && [ "$BASE_SHA" != "0000000000000000000000000000000000000000" ]
+          is_diff_event() {
+            ( [ "$EVENT_NAME" = "push" ] && [ "$BASE_SHA" != "0000000000000000000000000000000000000000" ] ) ||
+            [ "$EVENT_NAME" = "pull_request" ]
           }
 
           requested_project="${REQUESTED_PROJECT}"
@@ -61,7 +62,7 @@ jobs:
               .* ) continue ;;
             esac
             
-            if is_push_event; then
+            if is_diff_event; then
               if ! git diff --quiet "$BASE_SHA" "$HEAD_SHA" -- "$dir"; then
                 echo "Changes detected in '$name', adding to build matrix."
               else
@@ -162,7 +163,7 @@ jobs:
           fi
 
           if [ "$project_count" -eq 0 ]; then
-            if is_push_event; then
+            if is_diff_event; then
               echo "No changed projects found to build."
             else
               echo "::error::No build targets detected."
@@ -286,7 +287,7 @@ jobs:
           project_description="Container image for $PROJECT_NAME. For full details, see the documentation."
 
           repo="$GITHUB_REPOSITORY"
-          default_branch="main"
+          default_branch="${{ github.event.repository.default_branch }}"
           documentation="https://github.com/$repo/blob/$default_branch/README.md"
           if [ -n "${PROJECT_README}" ] && [ -f "$PROJECT_README" ]; then
             documentation="https://github.com/$repo/blob/$default_branch/$PROJECT_README"
@@ -317,7 +318,7 @@ jobs:
         with:
           images: ${{ steps.vars.outputs.image }}
           tags: |
-            type=raw,value=${{ steps.vars.outputs.nightly_tag }},enable=${{ github.ref_type != 'tag' }}
+            type=raw,value=${{ steps.vars.outputs.nightly_tag }},enable=${{ github.ref_type == 'branch' && github.ref_name == 'main' }}
             type=raw,value=${{ steps.vars.outputs.version_tag }},enable=${{ github.ref_type == 'tag' }}
             type=raw,value=latest,enable=${{ github.ref_type == 'tag' }}
           labels: |
@@ -348,12 +349,14 @@ jobs:
         with:
           context: ${{ matrix.project.context }}
           file: ${{ matrix.project.dockerfile }}
-          push: true
+          push: ${{ (github.ref_type == 'branch' && github.ref_name == 'main') || github.ref_type == 'tag' || github.event_name == 'release' }}
           platforms: ${{ matrix.project.platforms }}
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
           annotations: ${{ steps.meta.outputs.annotations }}
           build-args: ${{ steps.load_env.outputs.build_args }}
+          cache-from: type=registry,ref=${{ steps.vars.outputs.image }}:${{ matrix.project.version }}-buildcache
+          cache-to: type=registry,ref=${{ steps.vars.outputs.image }}:${{ matrix.project.version }}-buildcache,mode=max,ignore-error=true
       
       #- name: Create architecture-specific tags
       #  if: steps.build.outputs.digest != ''
