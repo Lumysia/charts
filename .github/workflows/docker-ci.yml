@@ -62,6 +62,11 @@ jobs:
               .* ) continue ;;
             esac
             
+            if [ -f "$dir/disabled" ]; then
+              echo "Skipping '$name' because 'disabled' file was found."
+              continue
+            fi
+            
             if is_diff_event; then
               if ! git diff --quiet "$BASE_SHA" "$HEAD_SHA" -- "$dir"; then
                 echo "Changes detected in '$name', adding to build matrix."
@@ -152,7 +157,9 @@ jobs:
             done < <(find "$dir" -maxdepth 1 -type f -name "*.env" -print | sort)
 
             if [ $env_files_found -eq 0 ]; then
-                echo "::warning::No *.env files found in project '$name', skipping."
+                if [ ! -f "$dir/disabled" ]; then
+                  echo "::warning::No *.env files found in project '$name', skipping."
+                fi
             fi
 
           done < <(find . -maxdepth 1 -mindepth 1 -type d -print | sort)
