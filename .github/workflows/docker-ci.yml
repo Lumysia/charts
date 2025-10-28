@@ -86,18 +86,14 @@ jobs:
               version=$(basename "$env_file" .env)
               echo "Found env file '$env_file' for project '$name', version '$version'."
 
-              platform_file="$dir/platforms"
               project_platforms="linux/amd64"
-              if [ -f "$platform_file" ]; then
-                platforms_from_file=$(tr -d '[:space:]' < "$platform_file")
-                if [ -n "$platforms_from_file" ]; then
-                  project_platforms="$platforms_from_file"
-                  echo "Found platforms in '$platform_file': $project_platforms"
-                else
-                  echo "::warning::Platform file '$platform_file' is empty, using default '$project_platforms'."
-                fi
+              platforms_from_env=$(grep '^PLATFORMS=' "$env_file" | cut -d'=' -f2- | tr -d '[:space:]' || true)
+
+              if [ -n "$platforms_from_env" ]; then
+                project_platforms="$platforms_from_env"
+                echo "Found PLATFORMS in '$env_file': $project_platforms"
               else
-                  echo "::warning::Platform file not found at '$platform_file', using default '$project_platforms'."
+                echo "PLATFORMS not found in '$env_file', using default: $project_platforms"
               fi
 
               dockerfile_path="$dir/Dockerfile"
