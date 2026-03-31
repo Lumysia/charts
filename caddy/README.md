@@ -17,7 +17,7 @@ This image includes the following Caddy modules:
 - `github.com/mholt/caddy-l4` - Layer 4 (non-HTTP) proxy capabilities
 - `github.com/caddy-dns/cloudflare` - Cloudflare DNS provider
 
-### alpine-docker tag
+### alpine-proxy tag
 
 Includes all modules from the Alpine variant, plus:
 
