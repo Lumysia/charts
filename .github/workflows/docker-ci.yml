@@ -396,7 +396,7 @@ jobs:
       
       - name: Update Docker Hub README
         if: env.REGISTRY == 'docker.io'
-        uses: peter-evans/dockerhub-description@v4
+        uses: peter-evans/dockerhub-description@v5
         with:
           username: ${{ secrets.REGISTRY_USERNAME }}
           password: ${{ secrets.REGISTRY_TOKEN }}
