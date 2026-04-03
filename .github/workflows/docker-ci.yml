@@ -31,7 +31,7 @@ jobs:
       project_matrix: ${{ steps.collect.outputs.project_matrix }}
       has_projects: ${{ steps.collect.outputs.has_projects }}
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v6
         with:
           fetch-depth: 0
       - id: collect
@@ -191,7 +191,7 @@ jobs:
     env:
       REGISTRY: ${{ vars.CONTAINER_REGISTRY != '' && vars.CONTAINER_REGISTRY || 'ghcr.io' }}
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v6
         with:
           fetch-depth: 0
       - uses: docker/setup-qemu-action@v4
