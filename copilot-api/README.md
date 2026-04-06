@@ -17,15 +17,3 @@
 | Port | Description |
 |------|-------------|
 | `4141` | HTTP API server (OpenAI/Anthropic compatible) |
-
-## Quick Start
-
-```sh
-docker run -e GH_TOKEN=your_token ghcr.io/lumysia/copilot-api:alpine-nightly
-```
-
-To authenticate interactively (if no `GH_TOKEN`):
-
-```sh
-docker run -it ghcr.io/lumysia/copilot-api:alpine-nightly --auth
-```
