@@ -12,6 +12,10 @@
 |----------|-------------|
 | `GH_TOKEN` | GitHub personal access token with Copilot access |
 
+- `GH_TOKEN` is the upstream GitHub token used by the service itself.
+
+- `API_KEY` / `COPILOT_API_KEY` are optional downstream auth keys for clients calling this API. They are not required unless you want to protect the exposed endpoint.
+
 ## Ports
 
 | Port | Description |
