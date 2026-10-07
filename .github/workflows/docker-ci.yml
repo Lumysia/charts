@@ -100,6 +100,7 @@ jobs:
               if [ -f "$dockerfile_path" ]; then
                 external="false"
                 repo=""
+                source_ref=""
                 token_env=""
                 context="$name"
                 dockerfile_rel="$name/Dockerfile"
@@ -110,6 +111,8 @@ jobs:
                   exit 1
                 fi
                 repo="$(head -n 1 "$git_file" | tr -d '\r' | xargs)"
+                source_ref=""
+                { read -r _ || true; read -r source_ref || true; } < "$git_file"
                 if [ -z "$repo" ]; then
                   echo "::error::Directory '$name' has empty external-git.txt."
                   exit 1
@@ -127,6 +130,7 @@ jobs:
                 --arg dockerfile "$dockerfile_rel" \
                 --arg readme "$readme_rel" \
                 --arg repo "$repo" \
+                --arg source_ref "$source_ref" \
                 --arg token_env "$token_env" \
                 --arg external "$external" \
                 --arg env_file "$env_file" \
@@ -139,6 +143,7 @@ jobs:
                   dockerfile:$dockerfile,
                   readme:$readme,
                   repo:(if $repo == "" then null else $repo end),
+                  source_ref:$source_ref,
                   token_env:(if $token_env == "" then null else $token_env end),
                   external:($external == "true"),
                   env_file:$env_file,
@@ -214,9 +219,12 @@ jobs:
           password: ${{ secrets.REGISTRY_TOKEN }}
       
       - name: Fetch external source
+        id: source
         if: matrix.project.external == true
         env:
           REPO: ${{ matrix.project.repo }}
+          SOURCE_REF: ${{ matrix.project.source_ref }}
+          GH_TOKEN: ${{ github.token }}
           CLONE_DIR: ${{ matrix.project.context }}
           TOKEN_ENV: ${{ matrix.project.token_env }}
         run: |
@@ -232,6 +240,17 @@ jobs:
           else
             git clone "$REPO" "$CLONE_DIR"
           fi
+          if [ "$SOURCE_REF" = "latest-release" ]; then
+            upstream="${REPO#https://github.com/}"
+            SOURCE_REF=$(gh api "repos/${upstream%.git}/releases/latest" --jq '.tag_name')
+            test -n "$SOURCE_REF"
+          fi
+          if [ -n "$SOURCE_REF" ]; then
+            git -C "$CLONE_DIR" checkout --detach "refs/tags/$SOURCE_REF"
+          fi
+          revision=$(git -C "$CLONE_DIR" rev-parse HEAD)
+          printf 'revision=%s\n' "$revision" >> "$GITHUB_OUTPUT"
+          printf 'Source: %s %s (%s)\n' "$REPO" "${SOURCE_REF:-default branch}" "$revision" >> "$GITHUB_STEP_SUMMARY"
       
       - name: Ensure Dockerfile exists
         run: |
@@ -335,11 +354,16 @@ jobs:
 
       - name: Load build arguments from .env file
         id: load_env
+        env:
+          SOURCE_REVISION: ${{ steps.source.outputs.revision }}
         run: |
           if [ -f "${{ matrix.project.env_file }}" ]; then
             {
               echo 'build_args<<EOF'
               grep -v '^#' "${{ matrix.project.env_file }}" | grep -v '^$'
+              if [ -n "$SOURCE_REVISION" ]; then
+                printf 'GIT_COMMIT=%s\n' "$SOURCE_REVISION"
+              fi
               echo 'EOF'
             } >> "$GITHUB_OUTPUT"
           else
@@ -395,7 +419,7 @@ jobs:
       #    done
       
       - name: Update Docker Hub README
-        if: env.REGISTRY == 'docker.io'
+        if: env.REGISTRY == 'docker.io' && github.event_name != 'pull_request'
         uses: peter-evans/dockerhub-description@v5
         with:
           username: ${{ secrets.REGISTRY_USERNAME }}
