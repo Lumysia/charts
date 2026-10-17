@@ -1,0 +1,47 @@
+name: Music Assistant bump
+
+on:
+  schedule:
+    - cron: '17 6 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: music-assistant-bump
+
+jobs:
+  bump:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Follow the official Music Assistant app
+        run: |
+          set -euo pipefail
+          dir=music-assistant
+          curl -fsSL -o /tmp/official.yaml \
+            https://raw.githubusercontent.com/music-assistant/home-assistant-addon/main/music_assistant/config.yaml
+          new=$(sed -n 's/^version: //p' /tmp/official.yaml)
+          old=$(sed -n 's/^version: //p' "$dir/upstream-config.yaml")
+          if [ "$new" = "$old" ]; then
+            echo "Already on $old."
+            exit 0
+          fi
+          if ! printf '%s' "$new" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+$'; then
+            echo "::error::Unexpected official version '$new'."
+            exit 1
+          fi
+          if ! diff <(grep -v '^version: ' "$dir/upstream-config.yaml") <(grep -v '^version: ' /tmp/official.yaml); then
+            echo "::error::The official app changed more than its version. Update $dir by hand."
+            exit 1
+          fi
+          docker manifest inspect "ghcr.io/music-assistant/server:$new" > /dev/null
+          cp /tmp/official.yaml "$dir/upstream-config.yaml"
+          sed -i "s/^version: .*/version: $new/" "$dir/config.yaml"
+          sed -i "s/^ARG MA_VERSION=.*/ARG MA_VERSION=$new/" "$dir/Dockerfile"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git commit -am "chore(music-assistant): bump to $new"
+          git push
