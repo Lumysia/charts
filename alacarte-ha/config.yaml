@@ -21,7 +21,6 @@ schema:
   music_path: str
 privileged:
   - SYS_ADMIN
-  - SYS_CHROOT
   - MKNOD
 apparmor: true
 stage: experimental

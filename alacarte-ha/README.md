@@ -44,7 +44,8 @@ Output goes to `music_path` (default `/media/music`) inside the HA `media` share
 
 ## Notes
 
-- The add-on needs `SYS_ADMIN`/`SYS_CHROOT`/`MKNOD` privileges for the wrapper's
-  Android chroot (device nodes + bind mount of the session into `/data`).
+- The add-on needs `SYS_ADMIN`/`MKNOD` privileges for the wrapper's
+  Android chroot (device nodes + bind mount of the session into `/data`;
+  chroot itself is allowed by Docker's default capabilities).
 - Apple soft-rate-limits bulk archiving by IP (~1500 songs → about a day).
 - Upstream is AGPL-3.0; source remains available at the repository linked above.
