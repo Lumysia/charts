@@ -1,0 +1,27 @@
+name: Apple Music Ripper (ALACarte)
+version: 2026.10.17
+slug: alacarte
+description: >-
+  Download Apple Music songs, albums, and followed playlists as DRM-free
+  lossless FLAC directly into Home Assistant's media library.
+url: https://github.com/norifm/alacarte
+arch:
+  - amd64
+startup: application
+boot: auto
+map:
+  - media:rw
+webui: http://[HOST]:[PORT:7373]/
+ports:
+  7373/tcp: 7373
+init: false
+options:
+  music_path: /media/music
+schema:
+  music_path: str
+privileged:
+  - SYS_ADMIN
+  - SYS_CHROOT
+  - MKNOD
+apparmor: true
+stage: experimental
