@@ -36,7 +36,7 @@ Compose equivalent of the upstream stack using these images:
 ```yaml
 services:
   wrapper:
-    image: ghcr.io/lumysia/alacarte-wrapper:wrapper-nightly
+    image: essaypu/alacarte-wrapper:wrapper-nightly
     platform: linux/amd64
     volumes:
       - ./data/wrapper:/app/rootfs/data
@@ -58,7 +58,7 @@ services:
     restart: on-failure
 
   web:
-    image: ghcr.io/lumysia/alacarte:web-nightly
+    image: essaypu/alacarte:web-nightly
     platform: linux/amd64
     depends_on:
       - wrapper
