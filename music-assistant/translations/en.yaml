@@ -1,7 +1,0 @@
-configuration:
-  log_level:
-    name: Log level
-    description: "Global log level. Use debug only while troubleshooting."
-  safe_mode:
-    name: Safe mode
-    description: "Start only the core controllers, without any providers, to troubleshoot problems."
