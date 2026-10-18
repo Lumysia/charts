@@ -1,10 +1,5 @@
-# alacarte-wrapper — FairPlay decryption daemon bundled by alacarte.
-# Upstream: https://github.com/norifm/alacarte (wrapper/ directory: prebuilt
-# x86_64 wrapper binary + Android rootfs + login-fix preloads + Go supervisor).
-# This Dockerfile mirrors upstream wrapper/Dockerfile, but fetches the source
-# at build time instead of relying on a local checkout.
-#
-# amd64 only: the bundled wrapper binary and rootfs libraries are x86_64.
+# Mirrors upstream wrapper/Dockerfile, fetching the source at build time.
+# amd64 only: bundled wrapper binary and rootfs libraries are x86_64.
 
 ARG ALACARTE_REPO=https://github.com/norifm/alacarte.git
 ARG ALACARTE_REF=main
