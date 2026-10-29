@@ -39,7 +39,7 @@ jobs:
         with:
           persist-credentials: false
       - name: Test build planning
-        run: node --test ci/
+        run: node --test ci/plan.test.mjs
 
   plan:
     needs: checks
