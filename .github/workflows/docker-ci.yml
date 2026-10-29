@@ -2,444 +2,153 @@ name: Docker CI
 
 on:
   push:
-    branches:
-      - main
-    tags:
-      - '*'
+    branches: [main]
+    tags: ['*']
   pull_request:
-    branches:
-      - main
-  release:
-    types:
-      - published
+    branches: [main]
   workflow_dispatch:
     inputs:
       project:
-        description: 'Optional subdirectory to build (default: all projects)'
+        description: Project directory (empty checks all enabled projects)
+        type: string
         required: false
+      force:
+        description: Build even if no upstream input changed
+        type: boolean
+        default: false
   schedule:
-    - cron: '0 0 1,15 * *'
+    # Builds variants whose base images or upstream sources changed, and anything
+    # older than MAX_AGE_DAYS so distro package fixes land weekly.
+    - cron: '17 */6 * * *'
 
 permissions:
   contents: read
-  packages: write
+
+concurrency:
+  group: docker-ci-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  REGCTL_VERSION: v0.11.7
 
 jobs:
-  prepare:
+  checks:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - name: Test build planning
+        run: node --test ci/plan.test.mjs
+
+  plan:
+    needs: checks
+    if: github.event_name != 'pull_request'
     runs-on: ubuntu-latest
     outputs:
-      project_matrix: ${{ steps.collect.outputs.project_matrix }}
-      has_projects: ${{ steps.collect.outputs.has_projects }}
+      matrix: ${{ steps.plan.outputs.matrix }}
+      has_builds: ${{ steps.plan.outputs.has_builds }}
+      publish: ${{ steps.plan.outputs.publish }}
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0
-      - id: collect
-        env:
-          REQUESTED_PROJECT: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.project || '' }}
-          EVENT_NAME: ${{ github.event_name }}
-          BASE_SHA: ${{ (github.event_name == 'push' && github.event.before) || (github.event_name == 'pull_request' && github.event.pull_request.base.sha) || '' }}
-          HEAD_SHA: ${{ (github.event_name == 'push' && github.sha) || (github.event_name == 'pull_request' && github.event.pull_request.head.sha) || '' }}
+          persist-credentials: false
+      - name: Install regctl
         run: |
           set -euo pipefail
-          
-          is_diff_event() {
-            ( [ "$EVENT_NAME" = "push" ] && [ "$BASE_SHA" != "0000000000000000000000000000000000000000" ] ) ||
-            [ "$EVENT_NAME" = "pull_request" ]
-          }
-
-          requested_project="${REQUESTED_PROJECT}"
-          projects_json='[]'
-          project_count=0
-          match_count=0
-          
-          while IFS= read -r dir; do
-            name="${dir#./}"
-            if [ "$name" = ".git" ] || [ "$name" = "external" ]; then
-              continue
-            fi
-            case "$name" in
-              .* ) continue ;;
-            esac
-            
-            if [ -f "$dir/disabled" ]; then
-              echo "Skipping '$name' because 'disabled' file was found."
-              continue
-            fi
-            
-            if is_diff_event; then
-              if ! git diff --quiet "$BASE_SHA" "$HEAD_SHA" -- "$dir"; then
-                echo "Changes detected in '$name', adding to build matrix."
-              else
-                echo "No changes in '$name', skipping."
-                continue
-              fi
-            fi
-
-            if [ -n "$requested_project" ] && [ "$name" != "$requested_project" ]; then
-              continue
-            fi
-
-            env_files_found=0
-            while IFS= read -r env_file; do
-              env_files_found=1
-              version=$(basename "$env_file" .env)
-              echo "Found env file '$env_file' for project '$name', version '$version'."
-
-              project_platforms="linux/amd64"
-              platforms_from_env=$(grep '^PLATFORMS=' "$env_file" | cut -d'=' -f2- | tr -d '[:space:]' || true)
-
-              if [ -n "$platforms_from_env" ]; then
-                project_platforms="$platforms_from_env"
-                echo "Found PLATFORMS in '$env_file': $project_platforms"
-              else
-                echo "PLATFORMS not found in '$env_file', using default: $project_platforms"
-              fi
-
-              dockerfile_path="$dir/Dockerfile"
-              if [ -f "$dockerfile_path" ]; then
-                external="false"
-                repo=""
-                source_ref=""
-                token_env=""
-                context="$name"
-                dockerfile_rel="$name/Dockerfile"
-              else
-                git_file="$dir/external-git.txt"
-                if [ ! -f "$git_file" ]; then
-                  echo "::error::Directory '$name' is missing Dockerfile and external-git.txt."
-                  exit 1
-                fi
-                repo="$(head -n 1 "$git_file" | tr -d '\r' | xargs)"
-                source_ref=""
-                { read -r _ || true; read -r source_ref || true; } < "$git_file"
-                if [ -z "$repo" ]; then
-                  echo "::error::Directory '$name' has empty external-git.txt."
-                  exit 1
-                fi
-                external="true"
-                token_env="GIT_${name}_SECRET_TOKEN"
-                context="external/$name"
-                dockerfile_rel="external/$name/Dockerfile"
-              fi
-              readme_rel="$name/README.md"
-              entry=$(jq -nc \
-                --arg name "$name" \
-                --arg path "$name" \
-                --arg context "$context" \
-                --arg dockerfile "$dockerfile_rel" \
-                --arg readme "$readme_rel" \
-                --arg repo "$repo" \
-                --arg source_ref "$source_ref" \
-                --arg token_env "$token_env" \
-                --arg external "$external" \
-                --arg env_file "$env_file" \
-                --arg version "$version" \
-                --arg platforms "$project_platforms" \
-                '{
-                  name:$name,
-                  path:$path,
-                  context:$context,
-                  dockerfile:$dockerfile,
-                  readme:$readme,
-                  repo:(if $repo == "" then null else $repo end),
-                  source_ref:$source_ref,
-                  token_env:(if $token_env == "" then null else $token_env end),
-                  external:($external == "true"),
-                  env_file:$env_file,
-                  version:$version,
-                  platforms:$platforms
-                }')
-              projects_json=$(echo "$projects_json" | jq --argjson entry "$entry" '. + [$entry]')
-              project_count=$((project_count + 1))
-              if [ -n "$requested_project" ] && [ "$name" = "$requested_project" ]; then
-                match_count=1
-              fi
-            done < <(find "$dir" -maxdepth 1 -type f -name "*.env" -print | sort)
-
-            if [ $env_files_found -eq 0 ]; then
-                if [ ! -f "$dir/disabled" ]; then
-                  echo "::warning::No *.env files found in project '$name', skipping."
-                fi
-            fi
-
-          done < <(find . -maxdepth 1 -mindepth 1 -type d -print | sort)
-          
-          if [ -n "$requested_project" ] && [ "$match_count" -eq 0 ]; then
-            echo "::error::Requested project '$requested_project' was not found."
-            exit 1
+          mkdir -p "$RUNNER_TEMP/bin"
+          curl -fsSL --retry 3 -o "$RUNNER_TEMP/bin/regctl" "https://github.com/regclient/regclient/releases/download/${REGCTL_VERSION}/regctl-linux-$(dpkg --print-architecture)"
+          chmod +x "$RUNNER_TEMP/bin/regctl"
+          echo "$RUNNER_TEMP/bin" >> "$GITHUB_PATH"
+      - name: Log in to the registry for lookups
+        env:
+          CONTAINER_REGISTRY: ${{ vars.CONTAINER_REGISTRY }}
+          REGISTRY_USERNAME: ${{ vars.REGISTRY_USERNAME }}
+          REGISTRY_TOKEN: ${{ secrets.REGISTRY_TOKEN }}
+        # Authenticated lookups avoid anonymous rate limits; they are optional for planning.
+        run: |
+          if [ -n "$CONTAINER_REGISTRY" ] && [ -n "$REGISTRY_USERNAME" ] && [ -n "$REGISTRY_TOKEN" ]; then
+            regctl registry login "$CONTAINER_REGISTRY" --user "$REGISTRY_USERNAME" --pass-stdin <<< "$REGISTRY_TOKEN"
           fi
-
-          if [ "$project_count" -eq 0 ]; then
-            if is_diff_event; then
-              echo "No changed projects found to build."
-            else
-              echo "::error::No build targets detected."
-              exit 1
-            fi
-          fi
-          
-          projects_json=$(echo "$projects_json" | jq -c '.')
-          
-          printf 'has_projects=%s\n' "$(if [ "$project_count" -gt 0 ]; then echo "true"; else echo "false"; fi)" >> "$GITHUB_OUTPUT"
-          printf 'project_matrix=%s\n' "$projects_json" >> "$GITHUB_OUTPUT"
+      - name: Select image variants
+        id: plan
+        env:
+          CONTAINER_REGISTRY: ${{ vars.CONTAINER_REGISTRY }}
+          CONTAINER_NAMESPACE: ${{ vars.CONTAINER_NAMESPACE }}
+          DEFAULT_BRANCH: main
+          MAX_AGE_DAYS: '7'
+          EVENT_NAME: ${{ github.event_name }}
+          REF: ${{ github.ref }}
+          BASE_SHA: ${{ github.event.before }}
+          HEAD_SHA: ${{ github.sha }}
+          PROJECT: ${{ inputs.project }}
+          FORCE: ${{ inputs.force }}
+          PUBLISH: 'true'
+          GITHUB_API_TOKEN: ${{ github.token }}
+        run: node ci/plan.mjs > /dev/null
 
   build:
-    name: build (${{ matrix.project.name }}-${{ matrix.project.version }})
-    needs: prepare
-    if: needs.prepare.outputs.has_projects == 'true'
+    name: build (${{ matrix.id }})
+    needs: plan
+    if: needs.plan.outputs.has_builds == 'true'
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
-      matrix:
-        project: ${{ fromJson(needs.prepare.outputs.project_matrix) }}
+      matrix: ${{ fromJSON(needs.plan.outputs.matrix) }}
     env:
-      REGISTRY: ${{ vars.CONTAINER_REGISTRY != '' && vars.CONTAINER_REGISTRY || 'ghcr.io' }}
+      PUBLISH: ${{ needs.plan.outputs.publish }}
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
         with:
-          fetch-depth: 0
+          persist-credentials: false
+      - name: Fetch upstream source
+        if: matrix.source_repo != ''
+        env:
+          REPO: ${{ matrix.source_repo }}
+          SHA: ${{ matrix.source_sha }}
+          DIR: ${{ matrix.context }}
+        run: |
+          set -euo pipefail
+          git clone --quiet "$REPO" "$DIR"
+          git -C "$DIR" checkout --quiet --detach "$SHA"
       - uses: docker/setup-qemu-action@v4
       - uses: docker/setup-buildx-action@v4
-
-      - name: Log in to ghcr.io
-        if: env.REGISTRY == 'ghcr.io'
+      - name: Log in to the registry
+        if: env.PUBLISH == 'true'
         uses: docker/login-action@v4
         with:
-          registry: ${{ env.REGISTRY }}
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
-      
-      - name: Log in to custom registry
-        if: env.REGISTRY != 'ghcr.io'
-        uses: docker/login-action@v4
-        with:
-          registry: ${{ env.REGISTRY }}
-          username: ${{ secrets.REGISTRY_USERNAME }}
+          registry: ${{ vars.CONTAINER_REGISTRY }}
+          username: ${{ vars.REGISTRY_USERNAME }}
           password: ${{ secrets.REGISTRY_TOKEN }}
-      
-      - name: Fetch external source
-        id: source
-        if: matrix.project.external == true
-        env:
-          REPO: ${{ matrix.project.repo }}
-          SOURCE_REF: ${{ matrix.project.source_ref }}
-          GH_TOKEN: ${{ github.token }}
-          CLONE_DIR: ${{ matrix.project.context }}
-          TOKEN_ENV: ${{ matrix.project.token_env }}
-        run: |
-          set -euo pipefail
-          mkdir -p "$(dirname "$CLONE_DIR")"
-          token_var="${TOKEN_ENV:-}"
-          token_value=""
-          if [ -n "$token_var" ]; then
-            token_value="$(printenv "$token_var" 2>/dev/null || true)"
-          fi
-          if [ -n "$token_value" ]; then
-            git -c http.extraHeader="Authorization: Bearer $token_value" clone "$REPO" "$CLONE_DIR"
-          else
-            git clone "$REPO" "$CLONE_DIR"
-          fi
-          if [ "$SOURCE_REF" = "latest-release" ]; then
-            upstream="${REPO#https://github.com/}"
-            SOURCE_REF=$(gh api "repos/${upstream%.git}/releases/latest" --jq '.tag_name')
-            test -n "$SOURCE_REF"
-          fi
-          if [ -n "$SOURCE_REF" ]; then
-            git -C "$CLONE_DIR" checkout --detach "refs/tags/$SOURCE_REF"
-          fi
-          revision=$(git -C "$CLONE_DIR" rev-parse HEAD)
-          printf 'revision=%s\n' "$revision" >> "$GITHUB_OUTPUT"
-          printf 'Source: %s %s (%s)\n' "$REPO" "${SOURCE_REF:-default branch}" "$revision" >> "$GITHUB_STEP_SUMMARY"
-      
-      - name: Ensure Dockerfile exists
-        run: |
-          set -euo pipefail
-          if [ ! -f "${{ matrix.project.dockerfile }}" ]; then
-            echo "::error::Dockerfile not found at ${{ matrix.project.dockerfile }}"
-            exit 1
-          fi
-      
-      - name: Prepare metadata
-        id: vars
-        env:
-          PROJECT_NAME: ${{ matrix.project.name }}
-          PROJECT_PATH: ${{ matrix.project.path }}
-          PROJECT_CONTEXT: ${{ matrix.project.context }}
-          PROJECT_README: ${{ matrix.project.readme }}
-          REGISTRY: ${{ env.REGISTRY }}
-          OWNER: ${{ github.repository_owner }}
-          REGISTRY_NAMESPACE: ${{ secrets.CONTAINER_NAMESPACE }}
-          REGISTRY_USERNAME: ${{ secrets.REGISTRY_USERNAME }}
-        run: |
-          set -euo pipefail
-          owner_lower=$(echo "$OWNER" | tr '[:upper:]' '[:lower:]')
-          project_slug=$(echo "$PROJECT_NAME" | tr '[:upper:]' '[:lower:]')
-          namespace="$owner_lower"
-          namespace_candidate=""
-          if [ -n "${REGISTRY_NAMESPACE:-}" ]; then
-            namespace_candidate="$REGISTRY_NAMESPACE"
-          else
-            namespace_candidate="${REGISTRY_USERNAME:-}"
-          fi
-          if [ -n "$namespace_candidate" ]; then
-            namespace_candidate=$(echo "$namespace_candidate" | tr '[:upper:]' '[:lower:]' | tr -d '[:space:]')
-            if [ -n "$namespace_candidate" ]; then
-              namespace="$namespace_candidate"
-            fi
-          fi
-          image="$REGISTRY/$namespace/$project_slug"
-          
-          file_version="${{ matrix.project.version }}"
-          if [ -z "$file_version" ]; then
-            echo "::error::Version from matrix is empty."
-            exit 1
-          fi
-
-          version_tag=""
-          nightly_tag=""
-
-          if [[ "${{ github.ref_type }}" == "tag" ]]; then
-            version_tag="${file_version}-${{ github.ref_name }}"
-          else
-            nightly_tag="${file_version}-nightly"
-          fi
-          
-          description="Container image for $PROJECT_NAME, version $file_version. For full details, see the documentation."
-          project_description="Container image for $PROJECT_NAME. For full details, see the documentation."
-
-          repo="$GITHUB_REPOSITORY"
-          default_branch="${{ github.event.repository.default_branch }}"
-          documentation="https://github.com/$repo/blob/$default_branch/README.md"
-          if [ -n "${PROJECT_README}" ] && [ -f "$PROJECT_README" ]; then
-            documentation="https://github.com/$repo/blob/$default_branch/$PROJECT_README"
-          fi
-
-          vendor_name=""
-          if [ "$REGISTRY" = "ghcr.io" ]; then
-            vendor_name="$OWNER"
-          else
-            vendor_name="${REGISTRY_USERNAME:-$OWNER}"
-          fi
-
-          project_url="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/tree/$default_branch/$PROJECT_PATH"
-
-          printf 'image=%s\n' "$image" >> "$GITHUB_OUTPUT"
-          printf 'project_slug=%s\n' "$project_slug" >> "$GITHUB_OUTPUT"
-          printf 'nightly_tag=%s\n' "$nightly_tag" >> "$GITHUB_OUTPUT"
-          printf 'version_tag=%s\n' "$version_tag" >> "$GITHUB_OUTPUT"
-          printf 'description=%s\n' "$description" >> "$GITHUB_OUTPUT"
-          printf 'project_description=%s\n' "$project_description" >> "$GITHUB_OUTPUT"
-          printf 'documentation=%s\n' "$documentation" >> "$GITHUB_OUTPUT"
-          printf 'project_url=%s\n' "$project_url" >> "$GITHUB_OUTPUT"
-          printf 'vendor_name=%s\n' "$vendor_name" >> "$GITHUB_OUTPUT"
-      
-      - name: Generate image metadata
-        id: meta
-        uses: docker/metadata-action@v6
-        with:
-          images: ${{ steps.vars.outputs.image }}
-          tags: |
-            type=raw,value=${{ steps.vars.outputs.nightly_tag }},enable=${{ github.ref_type == 'branch' && github.ref_name == 'main' }}
-            type=raw,value=${{ steps.vars.outputs.version_tag }},enable=${{ github.ref_type == 'tag' }}
-            type=raw,value=latest,enable=${{ github.ref_type == 'tag' }}
-          labels: |
-            org.opencontainers.image.title=${{ steps.vars.outputs.project_slug }}
-            org.opencontainers.image.description=${{ steps.vars.outputs.description }}
-            org.opencontainers.image.documentation=${{ steps.vars.outputs.documentation }}
-            org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
-            org.opencontainers.image.url=${{ steps.vars.outputs.project_url }}
-            org.opencontainers.image.revision=${{ github.sha }}
-            org.opencontainers.image.vendor=${{ steps.vars.outputs.vendor_name }}
-
-      - name: Load build arguments from .env file
-        id: load_env
-        env:
-          SOURCE_REVISION: ${{ steps.source.outputs.revision }}
-        run: |
-          if [ -f "${{ matrix.project.env_file }}" ]; then
-            {
-              echo 'build_args<<EOF'
-              grep -v '^#' "${{ matrix.project.env_file }}" | grep -v '^$'
-              if [ -n "$SOURCE_REVISION" ]; then
-                printf 'GIT_COMMIT=%s\n' "$SOURCE_REVISION"
-              fi
-              echo 'EOF'
-            } >> "$GITHUB_OUTPUT"
-          else
-            echo "build_args=" >> "$GITHUB_OUTPUT"
-          fi
-      
-      - name: Build and push multi-platform image
-        id: build
+      - name: Build image
         uses: docker/build-push-action@v7
         with:
-          context: ${{ matrix.project.context }}
-          file: ${{ matrix.project.dockerfile }}
-          push: ${{ (github.ref_type == 'branch' && github.ref_name == 'main') || github.ref_type == 'tag' || github.event_name == 'release' }}
-          platforms: ${{ matrix.project.platforms }}
-          tags: ${{ steps.meta.outputs.tags }}
-          labels: ${{ steps.meta.outputs.labels }}
-          annotations: ${{ steps.meta.outputs.annotations }}
-          build-args: ${{ steps.load_env.outputs.build_args }}
-          cache-from: type=registry,ref=${{ steps.vars.outputs.image }}:${{ matrix.project.version }}-buildcache
-          cache-to: type=registry,ref=${{ steps.vars.outputs.image }}:${{ matrix.project.version }}-buildcache,mode=max,ignore-error=true
-      
-      #- name: Create architecture-specific tags
-      #  if: steps.build.outputs.digest != ''
-      #  env:
-      #    IMAGE: ${{ steps.vars.outputs.image }}
-      #    DIGEST: ${{ steps.build.outputs.digest }}
-      #    PLATFORMS: ${{ matrix.project.platforms }}
-      #    NIGHTLY_TAG: ${{ steps.vars.outputs.nightly_tag }}
-      #    VERSION_TAG: ${{ steps.vars.outputs.version_tag }}
-      #  run: |
-      #    set -euo pipefail
-      #    platform_map=$(jq -nc --arg list "$PLATFORMS" '
-      #      [$list | split(",")[] | select(length>0) | {platform:., arch:(. | split("/") | last)}]
-      #    ' | jq -c '.')
-      #    ref="$IMAGE@$DIGEST"
-      #    docker buildx imagetools inspect "$ref" --raw | jq -c '.manifests[]' | while read -r manifest; do
-      #      platform=$(echo "$manifest" | jq -r '.platform.os + "/" + .platform.architecture')
-      #      digest=$(echo "$manifest" | jq -r '.digest')
-      #      arch=$(echo "$platform_map" | jq -r --arg platform "$platform" '.[] | select(.platform == $platform) | .arch' | head -n 1)
-      #      if [ -z "$arch" ]; then
-      #        continue
-      #      fi
-      #
-      #      if [[ "${{ github.ref_type }}" == "tag" ]]; then
-      #        if [ -n "$VERSION_TAG" ]; then
-      #          docker buildx imagetools create --tag "$IMAGE:${VERSION_TAG}-${arch}" "$IMAGE@$digest"
-      #        fi
-      #      else
-      #        if [ -n "$NIGHTLY_TAG" ]; then
-      #          docker buildx imagetools create --tag "$IMAGE:${NIGHTLY_TAG}-${arch}" "$IMAGE@$digest"
-      #        fi
-      #      fi
-      #    done
-      
+          context: ${{ matrix.context }}
+          file: ${{ matrix.dockerfile }}
+          platforms: ${{ matrix.platforms }}
+          build-args: ${{ matrix.build_args }}
+          tags: ${{ matrix.tags }}
+          push: ${{ env.PUBLISH == 'true' }}
+          pull: true
+          no-cache: ${{ matrix.no_cache }}
+          cache-from: type=registry,ref=${{ matrix.image }}:${{ matrix.variant }}-buildcache
+          cache-to: ${{ env.PUBLISH == 'true' && format('type=registry,ref={0}:{1}-buildcache,mode=max,ignore-error=true', matrix.image, matrix.variant) || '' }}
+          labels: |
+            org.opencontainers.image.title=${{ matrix.name }}
+            org.opencontainers.image.description=Container image for ${{ matrix.name }}, version ${{ matrix.variant }}. For full details, see the documentation.
+            org.opencontainers.image.documentation=${{ github.server_url }}/${{ github.repository }}/blob/main/${{ matrix.readme || 'README.md' }}
+            org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
+            org.opencontainers.image.url=${{ github.server_url }}/${{ github.repository }}/tree/main/${{ matrix.name }}
+            org.opencontainers.image.revision=${{ github.sha }}
+            org.opencontainers.image.version=${{ matrix.variant }}
+            ${{ matrix.labels }}
       - name: Update Docker Hub README
-        if: env.REGISTRY == 'docker.io' && github.event_name != 'pull_request'
+        if: env.PUBLISH == 'true' && vars.CONTAINER_REGISTRY == 'docker.io' && matrix.readme != ''
         uses: peter-evans/dockerhub-description@v5
         with:
-          username: ${{ secrets.REGISTRY_USERNAME }}
+          username: ${{ vars.REGISTRY_USERNAME }}
           password: ${{ secrets.REGISTRY_TOKEN }}
-          repository: ${{ secrets.CONTAINER_NAMESPACE }}/${{ steps.vars.outputs.project_slug }}
-          readme-filepath: ${{ matrix.project.readme }}
-          short-description: ${{ steps.vars.outputs.project_description }}
-
-      - name: Summarize artifacts
-        env:
-          PROJECT_NAME: ${{ matrix.project.name }}
-          IMAGE_NAME: ${{ steps.vars.outputs.image }}
-          DIGEST: ${{ steps.build.outputs.digest }}
-        run: |
-          set -euo pipefail
-          {
-            echo "### $PROJECT_NAME (${{ matrix.project.version }})"
-            echo ""
-            echo "- Image: \`$IMAGE_NAME\`"
-            if [ -n "$DIGEST" ]; then
-              echo "- Multi-arch digest: \`$DIGEST\`"
-            fi
-          } >> "$GITHUB_STEP_SUMMARY"
+          repository: ${{ vars.CONTAINER_NAMESPACE }}/${{ matrix.name }}
+          readme-filepath: ${{ matrix.readme }}
+          short-description: Container image for ${{ matrix.name }}. For full details, see the documentation.
