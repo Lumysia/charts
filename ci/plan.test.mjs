@@ -40,7 +40,11 @@ function fakeIO(root, {published = {}, overrides = {}} = {}) {
   return {
     root, calls, now: () => NOW,
     git: {hasCommit: () => true, diff: () => overrides.diff ?? []},
-    imageDigest: image => { calls.push(`digest ${image}`); return (overrides.digests ?? digests)[image] ?? assert.fail(`unexpected image ${image}`); },
+    imageDigest: (image, platform) => {
+      calls.push(`digest ${image} ${platform}`);
+      const all = overrides.digests ?? digests;
+      return all[`${image} ${platform}`] ?? all[image] ?? assert.fail(`unexpected image ${image}`);
+    },
     gitResolve: (repo, ref) => (overrides.commits ?? commits)[`${repo} ${ref}`] ?? assert.fail(`unexpected git ${repo} ${ref}`),
     gitFile: () => 'FROM node:22\n',
     published: ref => { calls.push(`published ${ref}`); return published[ref] ?? null; },
@@ -105,7 +109,7 @@ test('no-change path: current images are skipped without any build', async t => 
   assert.deepEqual(result.include, []);
   assert.deepEqual(result.skipped, ['app/web', 'proxy/alpine', 'proxy/plus', 'src/main']);
   // Each shared base is looked up once per run; nothing is pulled.
-  assert.equal(io.calls.filter(c => c === 'digest alpine').length, 1);
+  assert.equal(io.calls.filter(c => c === 'digest alpine linux/amd64').length, 1);
 });
 
 test('a moved base digest or upstream commit rebuilds only the affected variants', async t => {
@@ -113,12 +117,36 @@ test('a moved base digest or upstream commit rebuilds only the affected variants
   const published = await currentImages(root);
   const moved = await plan(env(), fakeIO(root, {published, overrides: {digests: {...digests, alpine: 'sha256:a2'}}}));
   assert.deepEqual(moved.include.map(x => x.id), ['proxy/alpine', 'proxy/plus']);
-  assert.match(moved.include[0].reasons, /^alpine a1 -> a2$/);
+  assert.match(moved.include[0].reasons, /^alpine linux\/amd64 a1 -> a2, linux\/arm64 a1 -> a2$/);
   assert.equal(moved.include[0].no_cache, true);
 
   const upstream = await plan(env(), fakeIO(root, {published, overrides: {commits: {...commits, 'https://example.invalid/up/src.git main': 'e'.repeat(40)}}}));
   assert.deepEqual(upstream.include.map(x => x.id), ['src/main']);
   assert.match(upstream.include[0].reasons, /git:APP dddddddddddd -> eeeeeeeeeeee/);
+});
+
+test('a base republished only for platforms we do not build is ignored', async t => {
+  const root = tree(t, recipes);
+  const published = await currentImages(root);
+  // Official images often republish one slow architecture (riscv64) days later.
+  const other = await plan(env(), fakeIO(root, {published, overrides: {digests: {...digests, 'alpine linux/riscv64': 'sha256:r2'}}}));
+  assert.deepEqual(other.include, []);
+  // A change to one platform we build rebuilds the variant and names that platform.
+  const arm = await plan(env(), fakeIO(root, {published, overrides: {digests: {...digests, 'alpine linux/arm64': 'sha256:a2'}}}));
+  assert.deepEqual(arm.include.map(x => `${x.id} ${x.reasons}`), ['proxy/alpine alpine linux/arm64 a1 -> a2']);
+});
+
+test('labels from before per-platform digests compare against the index digest', async t => {
+  const root = tree(t, recipes);
+  const published = await currentImages(root);
+  const old = {[INPUTS_LABEL]: JSON.stringify({'builder-alpine': 'sha256:b1', 'golang:1': 'sha256:g1', alpine: 'sha256:a1'})};
+  published['docker.io/example/proxy:plus-nightly'].labels = old;
+  // Same index digest as when built: no rebuild just because the label format changed.
+  const same = await plan(env(), fakeIO(root, {published}));
+  assert.deepEqual(same.include, []);
+  const moved = await plan(env(), fakeIO(root, {published, overrides: {digests: {...digests, alpine: 'sha256:a9'}}}));
+  assert.deepEqual(moved.include.map(x => x.id), ['proxy/alpine', 'proxy/plus']);
+  assert.match(moved.include.find(x => x.id === 'proxy/plus').reasons, /^alpine a1 -> linux\/amd64=/);
 });
 
 test('missing image, missing label and weekly age all rebuild', async t => {
@@ -154,10 +182,10 @@ test('matrix entries carry tags, build args, the inputs label and the pinned sou
   assert.equal(app.tags, 'docker.io/example/app:web-nightly');
   assert.equal(app.source_sha, 'c'.repeat(40));
   assert.equal(app.build_args, `GIT_COMMIT=${'c'.repeat(40)}`);
-  assert.deepEqual(JSON.parse(app.labels.split('=').slice(1).join('=')), {'git:source': 'c'.repeat(40), 'node:22': 'sha256:n1'});
+  assert.deepEqual(JSON.parse(app.labels.split('=').slice(1).join('=')), {'git:source': 'c'.repeat(40), 'node:22': 'linux/amd64=sha256:n1'});
   const src = include.find(x => x.id === 'src/main');
   assert.deepEqual(JSON.parse(src.labels.slice(INPUTS_LABEL.length + 1)),
-    {'alpine:3': 'sha256:a3', 'debian@sha256:abc': 'sha256:abc', 'git:APP': 'd'.repeat(40)});
+    {'alpine:3': 'linux/amd64=sha256:a3', 'debian@sha256:abc': 'sha256:abc', 'git:APP': 'd'.repeat(40)});
   assert.equal(include.find(x => x.id === 'proxy/plus').build_args, 'BASE=alpine\nEXTRA=a b c');
 });
 

@@ -4,8 +4,9 @@
 // A project is a directory with `<variant>.env` files. Each variant is built from the
 // project's Dockerfile, or from the repository named in `external-git.txt`. Scheduled and
 // manual runs build a variant only when something it depends on changed since the
-// published image was built: the digest of an image in a FROM line, or the commit of an
-// upstream git source. Those inputs are stored on the image in the INPUTS_LABEL label.
+// published image was built: the digest of an image in a FROM line (for each platform the
+// variant builds, so a base image republished only for other architectures does not count),
+// or the commit of an upstream git source. Those inputs are stored on the image in the INPUTS_LABEL label.
 import {appendFileSync, existsSync, mkdtempSync, readdirSync, readFileSync, rmSync} from 'node:fs';
 import {execFileSync} from 'node:child_process';
 import {tmpdir} from 'node:os';
@@ -167,6 +168,19 @@ export function tagsFor(v, s) {
 
 const short = value => value.replace(/^sha256:/, '').slice(0, 12);
 
+/** Names what moved in an input; per-platform digests list only the platforms that changed. */
+function describeChange(key, was, now) {
+  const split = value => Object.fromEntries(value.split(',').map(part => {
+    const eq = part.lastIndexOf('=');
+    return eq > 0 ? [part.slice(0, eq), part.slice(eq + 1)] : ['', part];
+  }));
+  const [before, after] = [split(was), split(now)];
+  if ('' in before || '' in after) return `${key} ${short(was)} -> ${short(now)}`;
+  const moved = Object.keys(after).filter(platform => before[platform] !== after[platform])
+    .map(platform => before[platform] ? `${platform} ${short(before[platform])} -> ${short(after[platform])}` : `${platform} added`);
+  return `${key} ${moved.join(', ') || 'platforms removed'}`;
+}
+
 /** Resolves every input of a variant to an immutable id. Results are cached per run. */
 export async function resolveInputs(v, io, cache = new Map()) {
   const once = (key, fn) => {
@@ -185,7 +199,12 @@ export async function resolveInputs(v, io, cache = new Map()) {
   }
   const parsed = parseDockerfile(dockerfile, v.buildArgs);
   for (const image of parsed.images) {
-    inputs[image] = image.includes('@') ? image.slice(image.indexOf('@') + 1) : await once(`image ${image}`, () => io.imageDigest(image));
+    if (image.includes('@')) { inputs[image] = image.slice(image.indexOf('@') + 1); continue; }
+    const digests = [];
+    for (const platform of v.platforms.split(',')) {
+      digests.push(`${platform}=${await once(`image ${image} ${platform}`, () => io.imageDigest(image, platform))}`);
+    }
+    inputs[image] = digests.join(',');
   }
   for (const git of gitArgSources({...parsed.defaults, ...v.buildArgs})) {
     inputs[git.key] = await once(`git ${git.repo} ${git.ref}`, () => io.gitResolve(git.repo, git.ref));
@@ -209,7 +228,9 @@ export async function staleness(v, tag, resolved, s, io) {
     for (const key of new Set([...Object.keys(recorded), ...Object.keys(resolved.inputs)])) {
       const [was, now] = [recorded[key], resolved.inputs[key]];
       if (was === now) continue;
-      reasons.push(!was ? `new input ${key}` : !now ? `input ${key} removed` : `${key} ${short(was)} -> ${short(now)}`);
+      // Images built before per-platform digests recorded the multi-platform index digest.
+      if (was && now?.includes('=') && !was.includes('=') && was === await io.imageDigest(key)) continue;
+      reasons.push(!was ? `new input ${key}` : !now ? `input ${key} removed` : describeChange(key, was, now));
     }
   }
   const ageDays = (io.now() - Date.parse(published.created)) / 86400000;
@@ -272,7 +293,7 @@ const gitCli = {
 export function liveIO(root, env) {
   return {
     root, git: gitCli, now: () => Date.now(),
-    imageDigest: image => run('regctl', ['image', 'digest', image]),
+    imageDigest: (image, platform) => run('regctl', ['image', 'digest', image, ...(platform ? ['--platform', platform] : [])]),
     async gitResolve(repo, ref) {
       if (/^[0-9a-f]{40}$/.test(ref)) return ref;
       if (ref === 'latest-release') {
