@@ -19,6 +19,12 @@ RUN npm install --global --no-audit --no-fund "@deepseek-ai/dsh@${DSH_VERSION}" 
  && npm cache clean --force \
  && dsh --version | tee /etc/cua-image/dsh-version
 
+# ssh and ssh-keygen: git signs commits with an SSH key (gpg.format=ssh), which
+# fails with "cannot run ssh-keygen" without them, and some remotes use ssh.
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends openssh-client \
+ && rm -rf /var/lib/apt/lists/*
+
 COPY files/start-dsh.sh /opt/dsh/start-dsh.sh
 COPY files/seed-home.sh /opt/cua/entrypoint.d/50-dsh-home.sh
 COPY files/dsh.healthcheck.sh /opt/cua/healthcheck.d/20-dsh.sh
