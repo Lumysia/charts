@@ -11,6 +11,12 @@ DSH is added as one more supervisord program (`dsh`, user `cua`) next to the bas
 own services, which keep working unchanged. Only DSH itself is baked in; plugins are
 installed at runtime into `DSH_HOME` and persist with it.
 
+On amd64 the desktop's Chromium binary is replaced with
+[Chrome for Testing](https://googlechromelabs.github.io/chrome-for-testing/) from the Stable
+channel (build arg `CHROME_VERSION`: a channel or an exact version), because the base's
+packaged Chromium trails Chrome's security releases. arm64 keeps the base's Chromium, since
+Chrome for Testing has no Linux arm64 build.
+
 DSH is a developer preview: expect breaking changes between releases.
 
 ## Ports
