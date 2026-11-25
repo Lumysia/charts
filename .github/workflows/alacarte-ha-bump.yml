@@ -1,0 +1,38 @@
+name: ALACarte HA bump
+
+on:
+  schedule:
+    - cron: '23 6 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency: alacarte-ha-bump
+
+jobs:
+  bump:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Track upstream norifm/alacarte
+        run: |
+          set -euo pipefail
+          dir=alacarte-ha
+          sha=$(git ls-remote https://github.com/norifm/alacarte.git HEAD | cut -f1)
+          old=$(cat "$dir/upstream-sha.txt" 2>/dev/null || echo none)
+          if [ "$sha" = "$old" ]; then
+            echo "Already tracking $old."
+            exit 0
+          fi
+          printf '%s\n' "$sha" > "$dir/upstream-sha.txt"
+          new_version=$(date -u +%Y.%m.%d)
+          cur=$(sed -n 's/^version: //p' "$dir/config.yaml")
+          if [ "$new_version" != "$cur" ]; then
+            sed -i "s/^version: .*/version: $new_version/" "$dir/config.yaml"
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git commit -am "chore(alacarte-ha): track upstream ${sha:0:10}"
+          git push

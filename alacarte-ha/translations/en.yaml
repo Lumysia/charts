@@ -1,0 +1,4 @@
+configuration:
+  music_path:
+    name: Music path
+    description: "Target folder inside the mapped media library, e.g. /media/music. Music Assistant and Media Browser pick this up automatically."
